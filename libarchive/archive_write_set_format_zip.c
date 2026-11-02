@@ -2118,7 +2118,7 @@ archive_write_zip_finish_entry(struct archive_write *a)
 	 * and set the central directory value to 0xffffffff as a flag. */
 	if (zip->entry_compressed_written >= ZIP_4GB_MAX
 	    || zip->entry_uncompressed_written >= ZIP_4GB_MAX
-	    || zip->entry_offset > ZIP_4GB_MAX) {
+	    || zip->entry_offset >= ZIP_4GB_MAX) {
 		unsigned char zip64[32];
 		unsigned char *z = zip64, *zd;
 		memcpy(z, "\001\000\000\000", 4);
