@@ -604,8 +604,15 @@ archive_write_open2(struct archive *_a, void *client_data,
 
 	client_filter = __archive_write_allocate_filter(_a);
 
-	if (client_filter == NULL)
+	if (client_filter == NULL) {
+		/* Without the client filter, archive_write_client_free()
+		 * would never release the client data. */
+		if (freer != NULL)
+			(*freer)(&a->archive, client_data);
+		a->client_freer = NULL;
+		a->client_data = NULL;
 		return (ARCHIVE_FATAL);
+	}
 
 	client_filter->open = archive_write_client_open;
 	client_filter->write = archive_write_client_write;
