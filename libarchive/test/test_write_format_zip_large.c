@@ -457,3 +457,121 @@ DEFINE_TEST(test_write_format_zip_large)
 	free(buff);
 	free(nulldata);
 }
+
+/*
+ * Write a stored entry of the given size followed by a small entry named
+ * "second", and return the offset at which the second entry starts.
+ */
+static int64_t
+write_second_entry_after(struct fileblocks *fileblocks, int64_t size)
+{
+	struct archive_entry *ae;
+	struct archive *a;
+	int64_t offset;
+	size_t writesize;
+
+	a = archive_write_new();
+	archive_write_set_format_zip(a);
+	assertEqualIntA(a, ARCHIVE_OK,
+	    archive_write_set_options(a, "zip:compression=store"));
+	assertEqualIntA(a, ARCHIVE_OK,
+	    archive_write_set_options(a, "zip:fakecrc32"));
+	assertEqualIntA(a, ARCHIVE_OK,
+	    archive_write_set_bytes_per_block(a, 0)); /* No buffering. */
+	assertEqualIntA(a, ARCHIVE_OK,
+	    archive_write_open(a, fileblocks, NULL, memory_write, NULL));
+
+	assert((ae = archive_entry_new()) != NULL);
+	archive_entry_copy_pathname(ae, "first");
+	archive_entry_set_mode(ae, S_IFREG | 0644);
+	archive_entry_set_size(ae, size);
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_header(a, ae));
+	archive_entry_free(ae);
+	while (size > 0) {
+		writesize = nullsize;
+		if ((int64_t)writesize > size)
+			writesize = (size_t)size;
+		assertEqualIntA(a, (int)writesize,
+		    (int)archive_write_data(a, nulldata, writesize));
+		size -= writesize;
+	}
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_finish_entry(a));
+
+	offset = fileblocks->filesize;
+	assert((ae = archive_entry_new()) != NULL);
+	archive_entry_copy_pathname(ae, "second");
+	archive_entry_set_mode(ae, S_IFREG | 0644);
+	archive_entry_set_size(ae, 0);
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_header(a, ae));
+	archive_entry_free(ae);
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_close(a));
+	assertEqualInt(ARCHIVE_OK, archive_write_free(a));
+	return (offset);
+}
+
+/*
+ * An entry that starts at offset exactly 0xffffffff must get a Zip64
+ * extra field in the central directory: the 32-bit offset field holds
+ * 0xffffffff, which means "see the Zip64 extra field".
+ */
+DEFINE_TEST(test_write_format_zip_large_offset_0xffffffff)
+{
+	struct fileblocks *fileblocks;
+	const char *p, *cd, *extra, *end;
+	char *buff;
+	int64_t size, offset;
+	size_t buffsize, s;
+	int found;
+
+	nullsize = (size_t)(1 * MB);
+	nulldata = malloc(nullsize);
+	memset(nulldata, 0xAA, nullsize);
+
+	/* Find the size of the first entry that puts the second entry
+	 * at 0xffffffff. */
+	size = 4 * GB - 1 * MB;
+	fileblocks = fileblocks_new();
+	offset = write_second_entry_after(fileblocks, size);
+	fileblocks_free(fileblocks);
+	size += 0xffffffffLL - offset;
+	fileblocks = fileblocks_new();
+	offset = write_second_entry_after(fileblocks, size);
+	assertEqualInt(0xffffffffLL, offset);
+
+	/* Collect the final bytes, which hold the central directory. */
+	buff = malloc(FINAL_SIZE);
+	buffsize = 0;
+	memory_read_open(NULL, fileblocks);
+	memory_read_seek(NULL, fileblocks, -FINAL_SIZE, SEEK_END);
+	while ((s = memory_read(NULL, fileblocks, (const void **)&p)) > 0) {
+		memcpy(buff + buffsize, p, s);
+		buffsize += s;
+	}
+	assertEqualInt(buffsize, FINAL_SIZE);
+
+	/* Find the central directory header of "second". */
+	found = 0;
+	for (cd = buff; cd + 52 <= buff + buffsize; cd++) {
+		if (memcmp(cd, "PK\001\002", 4) != 0 ||
+		    i2le(cd + 28) != 6 || memcmp(cd + 46, "second", 6) != 0)
+			continue;
+		assertEqualInt(0xffffffffLL, i4le(cd + 42));
+		extra = cd + 46 + 6;
+		end = extra + i2le(cd + 30);
+		while (extra + 4 <= end) {
+			if (i2le(extra) == 1) {
+				/* The only Zip64 value is the offset. */
+				assertEqualInt(8, i2le(extra + 2));
+				assertEqualInt(0xffffffffLL, i8le(extra + 4));
+				found = 1;
+			}
+			extra += 4 + i2le(extra + 2);
+		}
+		break;
+	}
+	assert(found);
+
+	fileblocks_free(fileblocks);
+	free(buff);
+	free(nulldata);
+}
