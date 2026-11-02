@@ -310,7 +310,9 @@ apply_substitution(struct bsdtar *bsdtar, const char *name, char **result,
 						*result = NULL;
 						return -1;
 					}
-					realloc_strncat(result, name + matches[c - '0'].rm_so, matches[c - '0'].rm_eo - matches[c - '0'].rm_so);
+					/* An unmatched subexpression has rm_so == -1. */
+					if (matches[c - '0'].rm_so != -1)
+						realloc_strncat(result, name + matches[c - '0'].rm_so, matches[c - '0'].rm_eo - matches[c - '0'].rm_so);
 					j = i + 1;
 					break;
 				default:
