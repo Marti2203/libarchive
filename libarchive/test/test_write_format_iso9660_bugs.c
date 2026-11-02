@@ -362,3 +362,58 @@ DEFINE_TEST(test_write_format_iso9660_symlink)
 	}
 	free(buff);
 }
+
+/*
+ * An mtime that localtime() cannot convert must not copy an uninitialized
+ * struct tm into the image; the writer records "not specified" instead.
+ */
+DEFINE_TEST(test_write_format_iso9660_unrepresentable_time)
+{
+	static char buff[1024 * 1024];
+	const char *p;
+	size_t used;
+	int found;
+	struct archive *a;
+	struct archive_entry *ae;
+
+	if (sizeof(time_t) < 8) {
+		skipping("time_t is too small for an unrepresentable year");
+		return;
+	}
+	assert((a = archive_write_new()) != NULL);
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_set_format_iso9660(a));
+	assertEqualIntA(a, ARCHIVE_OK,
+	    archive_write_open_memory(a, buff, sizeof(buff), &used));
+	assert((ae = archive_entry_new()) != NULL);
+	archive_entry_copy_pathname(ae, "file");
+	archive_entry_set_mode(ae, AE_IFREG | 0644);
+	archive_entry_set_size(ae, 0);
+	archive_entry_set_mtime(ae, (time_t)INT64_MAX, 0);
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_header(a, ae));
+	archive_entry_free(ae);
+	assertEqualIntA(a, ARCHIVE_OK, archive_write_close(a));
+	assertEqualInt(ARCHIVE_OK, archive_write_free(a));
+
+	/* The directory record of "FILE" (identifier "FILE.;1") must carry
+	 * an all-zero recording date: ECMA-119 9.1.5 "not specified". */
+	found = 0;
+	for (p = buff + 33; p + 7 <= buff + used; p++) {
+		if (p[-1] == 7 && memcmp(p, "FILE.;1", 7) == 0) {
+			assertEqualMem(p - 33 + 18, "\0\0\0\0\0\0\0", 7);
+			found = 1;
+			break;
+		}
+	}
+	assert(found);
+
+	assert((a = archive_read_new()) != NULL);
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_support_format_iso9660(a));
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_open_memory(a, buff, used));
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_next_header(a, &ae));
+	assertEqualString(".", archive_entry_pathname(ae));
+	assertEqualIntA(a, ARCHIVE_OK, archive_read_next_header(a, &ae));
+	assertEqualString("file", archive_entry_pathname(ae));
+	assert(!archive_entry_mtime_is_set(ae));
+	assertEqualIntA(a, ARCHIVE_EOF, archive_read_next_header(a, &ae));
+	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
+}
