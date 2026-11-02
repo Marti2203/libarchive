@@ -956,18 +956,24 @@ xmlwrite_time(struct archive_write *a, struct xml_writer *writer,
 	const char *key, time_t t, int z)
 {
 	char timestr[100];
-	struct tm tm;
+	struct tm *tm;
+#if defined(HAVE_GMTIME_R) || defined(HAVE_GMTIME_S)
+	struct tm tm_storage;
+#endif
 
 #if defined(HAVE_GMTIME_S)
-	gmtime_s(&tm, &t);
+	tm = gmtime_s(&tm_storage, &t) ? NULL : &tm_storage;
 #elif defined(HAVE_GMTIME_R)
-	gmtime_r(&t, &tm);
+	tm = gmtime_r(&t, &tm_storage);
 #else
-	memcpy(&tm, gmtime(&t), sizeof(tm));
+	tm = gmtime(&t);
 #endif
+	/* Omit a time that cannot be represented. */
+	if (tm == NULL)
+		return (ARCHIVE_OK);
 	memset(&timestr, 0, sizeof(timestr));
 	/* Do not use %F and %T for portability. */
-	strftime(timestr, sizeof(timestr), "%Y-%m-%dT%H:%M:%S", &tm);
+	strftime(timestr, sizeof(timestr), "%Y-%m-%dT%H:%M:%S", tm);
 	if (z)
 		strcat(timestr, "Z");
 	return (xmlwrite_string(a, writer, key, timestr));

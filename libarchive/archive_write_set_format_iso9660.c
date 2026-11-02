@@ -2519,19 +2519,31 @@ get_gmoffset(struct tm *tm)
 }
 #endif
 
-static void
+static int
 get_tmfromtime(struct tm *tm, time_t *t)
 {
 #if HAVE_LOCALTIME_S
-	localtime_s(tm, t);
+	return (localtime_s(tm, t) == 0 ? 0 : -1);
 #elif HAVE_LOCALTIME_R
 # ifdef HAVE_TZSET
 	tzset();
 # endif
-	localtime_r(t, tm);
+	return (localtime_r(t, tm) != NULL ? 0 : -1);
 #else
-	memcpy(tm, localtime(t), sizeof(*tm));
+	struct tm *p = localtime(t);
+
+	if (p == NULL)
+		return (-1);
+	memcpy(tm, p, sizeof(*tm));
+	return (0);
 #endif
+}
+
+static void
+set_date_time_null(unsigned char *p)
+{
+	memset(p, (int)'0', 16);
+	p[16] = 0;
 }
 
 /*
@@ -2543,7 +2555,11 @@ set_date_time(unsigned char *p, time_t t)
 {
 	struct tm tm;
 
-	get_tmfromtime(&tm, &t);
+	if (get_tmfromtime(&tm, &t) != 0) {
+		/* Record a time that cannot be converted as "not specified". */
+		set_date_time_null(p);
+		return;
+	}
 	set_digit(p, 4, tm.tm_year + 1900);
 	set_digit(p+4, 2, tm.tm_mon + 1);
 	set_digit(p+6, 2, tm.tm_mday);
@@ -2555,18 +2571,15 @@ set_date_time(unsigned char *p, time_t t)
 }
 
 static void
-set_date_time_null(unsigned char *p)
-{
-	memset(p, (int)'0', 16);
-	p[16] = 0;
-}
-
-static void
 set_time_915(unsigned char *p, time_t t)
 {
 	struct tm tm;
 
-	get_tmfromtime(&tm, &t);
+	if (get_tmfromtime(&tm, &t) != 0) {
+		/* All zero means "not specified" (ECMA-119 9.1.5). */
+		memset(p, 0, 7);
+		return;
+	}
 	set_num_711(p+0, tm.tm_year);
 	set_num_711(p+1, tm.tm_mon+1);
 	set_num_711(p+2, tm.tm_mday);
